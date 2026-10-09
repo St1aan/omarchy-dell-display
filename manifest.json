@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "stiaan.dell-display",
+  "name": "Dell Display",
+  "version": "1.0.0",
+  "author": "St1aan",
+  "description": "Dell Display Manager-style controls for Dell monitors over DDC/CI",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Dell Display",
+    "description": "Brightness, contrast, colour preset, inputs, PIP/PBP and KVM for Dell monitors",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "model": ""
+    },
+    "schema": [
+      {
+        "key": "model",
+        "type": "string",
+        "label": "Monitor model (blank = first Dell monitor)",
+        "defaultValue": ""
+      }
+    ]
+  },
+  "license": "MIT"
+}

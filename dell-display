@@ -1,0 +1,87 @@
+#!/bin/bash
+# DDC/CI backend for the Dell Display bar widget.
+#
+#   dell-display [--model NAME] state           print the monitor's settings as one JSON object
+#   dell-display [--model NAME] set CODE VALUE  write one VCP feature (only the codes below are allowed)
+#
+# --model picks the monitor by a substring of its DDC model name (e.g. U4924DW);
+# without it, the first Dell monitor found is used.
+#
+# ddcutil calls are serialized with a lock: two DDC transactions on the same
+# bus at once garble each other and the monitor answers neither.
+
+MODEL=""
+if [[ $1 == --model ]]; then
+  MODEL=$2
+  shift 2
+fi
+
+LOCK="${XDG_RUNTIME_DIR:-/tmp}/dell-display.lock"
+BUS_CACHE="${XDG_RUNTIME_DIR:-/tmp}/dell-display.${MODEL//[^A-Za-z0-9]/_}.bus"
+
+# 10 brightness, 12 contrast, 14 colour preset, 60 input (left window in PBP),
+# 62 volume, 8D mute, DC display mode, E7 KVM (Dell), E8 PBP right input (Dell),
+# E9 PIP/PBP layout (Dell).
+CODES=(10 12 14 60 62 8D DC E7 E8 E9)
+
+bus() {
+  if [[ -s $BUS_CACHE ]]; then
+    cat "$BUS_CACHE"
+    return
+  fi
+  local found
+  found=$(ddcutil detect --terse 2>/dev/null | awk -v m="$MODEL" '
+    /I2C bus:/ { bus = $NF; sub(".*-", "", bus) }
+    /Monitor:/ && index($0, "DEL:") && index($0, m) { print bus; exit }')
+  [[ -n $found ]] || return 1
+  echo "$found" | tee "$BUS_CACHE"
+}
+
+ddc() {
+  local b
+  b=$(bus) || return 1
+  flock -w 10 "$LOCK" ddcutil --bus "$b" --noverify "$@" 2>/dev/null
+}
+
+state() {
+  local out
+  if ! out=$(ddc --terse getvcp "${CODES[@]}"); then
+    rm -f "$BUS_CACHE"
+    echo '{"ok":false}'
+    return
+  fi
+
+  # Terse lines: "VCP 10 C 80 100" (continuous: current max),
+  # "VCP 14 SNC x05" (simple non-continuous), "VCP E9 CNC x00 xff x00 x24"
+  # (complex: mh ml sh sl -- the value lives in sl).
+  echo "$out" | awk '
+    function hex(s) { sub(/^x/, "", s); return strtonum("0x" s) }
+    $1 == "VCP" {
+      code = tolower($2)
+      if ($3 == "C") val[code] = $4 + 0
+      else if ($3 == "SNC") val[code] = hex($4)
+      else if ($3 == "CNC") val[code] = hex($7)
+    }
+    END {
+      printf "{\"ok\":true"
+      n = split("10:brightness 12:contrast 14:preset 60:input 62:volume 8d:mute dc:mode e7:kvm e8:pbpInput e9:pbp", keys, " ")
+      for (i = 1; i <= n; i++) {
+        split(keys[i], kv, ":")
+        printf ",\"%s\":%d", kv[2], (kv[1] in val) ? val[kv[1]] : -1
+      }
+      print "}"
+    }'
+}
+
+set_vcp() {
+  local code=${1^^} value=$2
+  [[ " ${CODES[*]} " == *" $code "* ]] || { echo "refusing VCP code $code" >&2; exit 2; }
+  [[ $value =~ ^(0x[0-9a-fA-F]+|[0-9]+)$ ]] || { echo "bad value $value" >&2; exit 2; }
+  ddc setvcp "$code" "$value"
+}
+
+case $1 in
+  state) state ;;
+  set) set_vcp "$2" "$3" ;;
+  *) echo "usage: dell-display [--model NAME] state | set CODE VALUE" >&2; exit 2 ;;
+esac
