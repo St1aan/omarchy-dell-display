@@ -22,6 +22,9 @@ Panel {
   readonly property string helperPath: decodeURIComponent(Qt.resolvedUrl("dell-display").toString().replace(/^file:\/\//, ""))
   // Substring of the monitor's DDC model name; empty = first Dell monitor.
   readonly property string model: String(setting("model", ""))
+  // The input this computer is plugged into, by label (see Model.inputs).
+  readonly property int laptopInput: Model.inputByLabel(String(setting("laptopInput", "HDMI 1")))
+  readonly property var inputOptions: Model.inputsFor(laptopInput)
 
   function helper(args) {
     var cmd = ["bash", helperPath]
@@ -33,6 +36,10 @@ Panel {
   // read succeeds or while the monitor isn't answering.
   property var dd: null
   property bool loading: true
+  // When dd was last known to match the monitor (a read, or our own write).
+  property real freshAt: 0
+  // Wheel steps that arrived while dd was stale; applied after the next read.
+  property int wheelBacklog: 0
 
   // Features whose change re-hotplugs the monitor or moves the KVM; re-read
   // the state once it settles rather than trusting the optimistic value.
@@ -61,14 +68,15 @@ Panel {
       { key: "mute", code: "8D", type: "choices", title: "SPEAKER", options: Model.speaker, columns: 2 },
       { key: "preset", code: "14", type: "choices", title: "COLOUR PRESET", options: Model.presets, columns: 4, separator: true },
       { key: "mode", code: "DC", type: "choices", title: "DISPLAY MODE", options: Model.modes, columns: 3 },
-      { key: "input", code: "60", type: "choices", title: pbpOn ? "LEFT INPUT" : "INPUT", options: Model.inputs, columns: 4, separator: true },
+      { key: "input", code: "60", type: "choices", title: pbpOn ? "LEFT INPUT" : "INPUT", options: inputOptions, columns: 4, separator: true },
       { key: "pbp", code: "E9", type: "choices", title: "PIP / PBP LAYOUT · EXPERIMENTAL", options: Model.layouts, columns: 4 }
     ]
     if (pbpOn) {
-      list.push({ key: "pbpInput", code: "E8", type: "choices", title: "RIGHT INPUT", options: Model.inputs, columns: 4 })
+      list.push({ key: "pbpInput", code: "E8", type: "choices", title: "RIGHT INPUT", options: inputOptions, columns: 4 })
       list.push({ key: "kvm", code: "E7", type: "choices", title: "KVM · EXPERIMENTAL", options: Model.kvm, columns: 1 })
     }
-    return list
+    // Features this monitor doesn't support read as -1.
+    return list.filter(function(row) { return dd[row.key] >= 0 })
   }
 
   function rowOptionCount(i) {
@@ -86,6 +94,7 @@ Panel {
   // ---- Writing ----
 
   function write(code, value) {
+    freshAt = Date.now()
     var next = Object.assign({}, pending)
     next[code] = value
     pending = next
@@ -112,6 +121,18 @@ Panel {
     dd = next
   }
 
+  // Scroll on the bar icon. Polling only runs while the panel is open, so
+  // dd may be old (or missing) by now: re-read first rather than step from a
+  // stale brightness.
+  function wheelBrightness(steps) {
+    if (!dd || Date.now() - freshAt > 10000) {
+      wheelBacklog += steps
+      refresh()
+      return
+    }
+    if (dd.brightness >= 0) setSlider({ key: "brightness", code: "10" }, dd.brightness + steps * 5)
+  }
+
   function setSlider(row, value) {
     var v = Model.clampPercent(value)
     setLocal(row.key, v)
@@ -122,7 +143,7 @@ Panel {
     if (!dd || !row || !option) return
     if (!option.momentary && dd[row.key] === option.value) return
 
-    if (dangerCodes.indexOf(row.code) >= 0 && !Model.laptopVisible(dd, row.code, option.value)) {
+    if (dangerCodes.indexOf(row.code) >= 0 && !Model.laptopVisible(dd, row.code, option.value, laptopInput)) {
       var key = row.code + ":" + option.value
       if (armed !== key) {
         armed = key
@@ -210,6 +231,17 @@ Panel {
 
   // Input/layout/KVM changes make the monitor re-hotplug; read back once it
   // has settled.
+  // After a failed write, read back the real value once the queue drains
+  // instead of showing the optimistic one until the next poll.
+  Timer {
+    id: reconcileTimer
+    interval: 300
+    onTriggered: {
+      if (writeProc.running || Object.keys(root.pending).length > 0) restart()
+      else root.refresh()
+    }
+  }
+
   Timer {
     id: settleTimer
     interval: 2500
@@ -226,6 +258,10 @@ Panel {
         // A write queued while reading wins over the stale read.
         if (writeProc.running || Object.keys(root.pending).length > 0) return
         root.dd = Model.parseState(text)
+        if (root.dd) root.freshAt = Date.now()
+        var steps = root.wheelBacklog
+        root.wheelBacklog = 0
+        if (root.dd && steps !== 0) root.wheelBrightness(steps)
       }
     }
   }
@@ -234,6 +270,7 @@ Panel {
     id: writeProc
     property string code: ""
     stdout: StdioCollector { waitForEnd: true }
+    onExited: function(exitCode) { if (exitCode !== 0) reconcileTimer.restart() }
     onRunningChanged: {
       if (running) return
       if (root.settleCodes.indexOf(code) >= 0) settleTimer.restart()
@@ -248,11 +285,10 @@ Panel {
     text: "󰹑"
     onPressed: function(b) { root.toggle() }
     onWheelMoved: function(delta) {
-      if (!root.dd) return
       var wheel = Util.wheelSteps(root.wheelAccumulator, delta)
       root.wheelAccumulator = wheel.remainder
       if (wheel.steps === 0) return
-      root.setSlider(root.rows[0], root.dd.brightness + wheel.steps * 5)
+      root.wheelBrightness(wheel.steps)
     }
   }
 

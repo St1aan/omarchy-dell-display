@@ -18,7 +18,8 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
-      "model": ""
+      "model": "",
+      "laptopInput": "HDMI 1"
     },
     "schema": [
       {
@@ -26,6 +27,19 @@
         "type": "string",
         "label": "Monitor model (blank = first Dell monitor)",
         "defaultValue": ""
+      },
+      {
+        "key": "laptopInput",
+        "type": "enum",
+        "label": "Input this computer uses",
+        "options": [
+          "HDMI 1",
+          "HDMI 2",
+          "DP",
+          "USB-C"
+        ],
+        "defaultValue": "HDMI 1",
+        "description": "Choices that would switch the monitor away from this input ask for a second click."
       }
     ]
   },

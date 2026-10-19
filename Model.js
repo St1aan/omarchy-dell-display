@@ -3,10 +3,12 @@
 // Dell-specific and undocumented, so layouts not yet identified on this
 // monitor are labelled by their raw value.
 
+// The input this computer is plugged into; the `laptopInput` setting
+// overrides it by label.
 var LAPTOP_INPUT = 0x11
 
 var inputs = [
-  { value: 0x11, label: "HDMI 1", hint: "this laptop" },
+  { value: 0x11, label: "HDMI 1" },
   { value: 0x12, label: "HDMI 2" },
   { value: 0x0f, label: "DP" },
   { value: 0x1b, label: "USB-C" }
@@ -55,6 +57,20 @@ function labelFor(options, value) {
   return value < 0 ? "?" : "0x" + value.toString(16).toUpperCase()
 }
 
+// Input value for a label from `inputs`, or LAPTOP_INPUT if unknown.
+function inputByLabel(label) {
+  for (var i = 0; i < inputs.length; i++)
+    if (inputs[i].label === label) return inputs[i].value
+  return LAPTOP_INPUT
+}
+
+// `inputs` with the hint on the one this computer uses.
+function inputsFor(laptopInput) {
+  return inputs.map(function(o) {
+    return o.value === laptopInput ? Object.assign({ hint: "this computer" }, o) : o
+  })
+}
+
 function parseState(raw) {
   try {
     var s = JSON.parse(String(raw || ""))
@@ -66,12 +82,13 @@ function parseState(raw) {
 
 // Would this laptop still be on screen after the change? Used to ask for a
 // second click before a switch that blanks the only picture we can see.
-function laptopVisible(state, code, value) {
+function laptopVisible(state, code, value, laptopInput) {
+  if (laptopInput === undefined) laptopInput = LAPTOP_INPUT
   var pbp = code === "E9" ? value : state.pbp
   var left = code === "60" ? value : state.input
   var right = code === "E8" ? value : state.pbpInput
-  if (left === LAPTOP_INPUT) return true
-  return pbp > 0 && right === LAPTOP_INPUT
+  if (left === laptopInput) return true
+  return pbp > 0 && right === laptopInput
 }
 
 function clampPercent(value) {
@@ -90,6 +107,8 @@ if (typeof module !== "undefined") {
     layouts: layouts,
     kvm: kvm,
     labelFor: labelFor,
+    inputByLabel: inputByLabel,
+    inputsFor: inputsFor,
     parseState: parseState,
     laptopVisible: laptopVisible,
     clampPercent: clampPercent

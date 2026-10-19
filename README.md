@@ -10,7 +10,8 @@ Built and tested on a **Dell U4924DW**. The standard controls (brightness,
 contrast, volume, mute, colour preset, display mode, input) use standard
 MCCS codes and should work on most Dell monitors. The PIP/PBP layout, right
 input and KVM controls use Dell's undocumented manufacturer codes
-(`0xE7`/`0xE8`/`0xE9`) and are marked **experimental**.
+(`0xE7`/`0xE8`/`0xE9`) and are marked **experimental**. Controls your monitor doesn't
+support are hidden.
 
 ## Install
 
@@ -37,12 +38,14 @@ the monitor's OSD menu.
 
 ## Settings
 
-| Key     | Default | Meaning |
-|---------|---------|---------|
-| `model` | `""`    | Substring of the monitor's DDC model name (e.g. `U4924DW`). Blank uses the first Dell monitor found. |
+| Key           | Default    | Meaning |
+|---------------|------------|---------|
+| `model`       | `""`       | Substring of the monitor's DDC model name (e.g. `U4924DW`, any case). Blank uses the first Dell monitor found. |
+| `laptopInput` | `"HDMI 1"` | The monitor input this computer is plugged into (`HDMI 1`, `HDMI 2`, `DP` or `USB-C`). Switching away from it needs a second click. |
 
 ```bash
 omarchy bar set stiaan.dell-display model U4924DW
+omarchy bar set stiaan.dell-display laptopInput DP
 ```
 
 ## Command-line helper
@@ -52,7 +55,7 @@ you can also call from keybindings (it lives in
 `~/.config/omarchy/plugins/stiaan.dell-display/`):
 
 ```bash
-dell-display [--model NAME] state            # all settings as JSON
+dell-display [--model NAME] state            # all settings as JSON (-1 = unsupported)
 dell-display [--model NAME] set CODE VALUE   # e.g. set 10 70  (brightness 70%)
 ```
 

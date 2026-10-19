@@ -4,8 +4,10 @@
 #   dell-display [--model NAME] state           print the monitor's settings as one JSON object
 #   dell-display [--model NAME] set CODE VALUE  write one VCP feature (only the codes below are allowed)
 #
-# --model picks the monitor by a substring of its DDC model name (e.g. U4924DW);
-# without it, the first Dell monitor found is used.
+# --model picks the monitor by a substring of its DDC model name (e.g. U4924DW,
+# any case); without it, the first Dell monitor found is used.
+#
+# `state` reports a feature the monitor doesn't support as -1.
 #
 # ddcutil calls are serialized with a lock: two DDC transactions on the same
 # bus at once garble each other and the monitor answers neither.
@@ -32,21 +34,41 @@ bus() {
   local found
   found=$(ddcutil detect --terse 2>/dev/null | awk -v m="$MODEL" '
     /I2C bus:/ { bus = $NF; sub(".*-", "", bus) }
-    /Monitor:/ && index($0, "DEL:") && index($0, m) { print bus; exit }')
+    /Monitor:/ && index($0, "DEL:") && index(tolower($0), tolower(m)) { print bus; exit }')
   [[ -n $found ]] || return 1
   echo "$found" | tee "$BUS_CACHE"
 }
 
+# Exits 75 if the lock can't be had within 10 s.
 ddc() {
   local b
   b=$(bus) || return 1
-  flock -w 10 "$LOCK" ddcutil --bus "$b" --noverify "$@" 2>/dev/null
+  flock -w 10 -E 75 "$LOCK" ddcutil --bus "$b" --noverify "$@" 2>/dev/null
+}
+
+# ddcutil exits non-zero if any requested feature is unsupported, so success
+# means at least one value came back.
+read_vcps() {
+  local out
+  out=$(ddc --terse getvcp "${CODES[@]}")
+  [[ $? -ne 75 ]] || return 75
+  echo "$out"
+  grep -qE '^VCP [0-9A-F]+ (C|SNC|CNC) ' <<<"$out"
 }
 
 state() {
-  local out
-  if ! out=$(ddc --terse getvcp "${CODES[@]}"); then
+  local out cached rc
+  [[ -s $BUS_CACHE ]] && cached=1
+  out=$(read_vcps)
+  rc=$?
+  # The monitor may have re-hotplugged onto another bus: detect afresh once.
+  if ((rc != 0 && rc != 75)) && [[ $cached ]]; then
     rm -f "$BUS_CACHE"
+    out=$(read_vcps)
+    rc=$?
+  fi
+  if ((rc != 0)); then
+    ((rc == 75)) || rm -f "$BUS_CACHE"
     echo '{"ok":false}'
     return
   fi
@@ -77,7 +99,17 @@ set_vcp() {
   local code=${1^^} value=$2
   [[ " ${CODES[*]} " == *" $code "* ]] || { echo "refusing VCP code $code" >&2; exit 2; }
   [[ $value =~ ^(0x[0-9a-fA-F]+|[0-9]+)$ ]] || { echo "bad value $value" >&2; exit 2; }
+  local cached rc
+  [[ -s $BUS_CACHE ]] && cached=1
   ddc setvcp "$code" "$value"
+  rc=$?
+  # As in state(): a stale cached bus gets one retry on a freshly detected bus.
+  if ((rc != 0 && rc != 75)) && [[ $cached ]]; then
+    rm -f "$BUS_CACHE"
+    ddc setvcp "$code" "$value"
+    rc=$?
+  fi
+  return $rc
 }
 
 case $1 in
